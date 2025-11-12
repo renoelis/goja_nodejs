@@ -1193,14 +1193,14 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 
 	exports := module.Get("exports").(*goja.Object)
 	exports.Set("Buffer", ctor)
-	
+
 	// 导出 constants 对象（Node.js 兼容）
 	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
 	constantsObj := b.r.NewObject()
-	constantsObj.Set("MAX_LENGTH", 9007199254740991)      // Number.MAX_SAFE_INTEGER
-	constantsObj.Set("MAX_STRING_LENGTH", 536870888)      // Node.js v25 的值
+	constantsObj.Set("MAX_LENGTH", 9007199254740991) // Number.MAX_SAFE_INTEGER
+	constantsObj.Set("MAX_STRING_LENGTH", 536870888) // Node.js v25 的值
 	exports.Set("constants", constantsObj)
-	
+
 	// 导出 atob 和 btoa 函数（Node.js v25 兼容）
 	atobFunc := b.r.ToValue(b.atob)
 	if atobObj, ok := atobFunc.(*goja.Object); ok {
@@ -1208,7 +1208,7 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 		atobObj.DefineDataProperty("name", b.r.ToValue("atob"), 0, 0, 0)
 	}
 	exports.Set("atob", atobFunc)
-	
+
 	btoaFunc := b.r.ToValue(b.btoa)
 	if btoaObj, ok := btoaFunc.(*goja.Object); ok {
 		btoaObj.DefineDataProperty("length", b.r.ToValue(1), 0, 0, 0)
@@ -1222,15 +1222,15 @@ func (b *Buffer) atob(call goja.FunctionCall) goja.Value {
 	if len(call.Arguments) == 0 {
 		panic(b.r.NewTypeError("atob: At least 1 argument required"))
 	}
-	
+
 	arg := call.Arguments[0]
-	
+
 	// 检查是否为 Symbol 类型 - 直接检查类型而不是调用转换方法
 	if symbol, ok := arg.(*goja.Symbol); ok {
 		_ = symbol // 避免未使用变量警告
 		panic(b.r.NewTypeError("Cannot convert a Symbol value to a string"))
 	}
-	
+
 	// 也检查对象包装的 Symbol
 	if obj, ok := arg.(*goja.Object); ok {
 		if exported := obj.Export(); exported != nil {
@@ -1239,9 +1239,9 @@ func (b *Buffer) atob(call goja.FunctionCall) goja.Value {
 			}
 		}
 	}
-	
+
 	input := arg.String()
-	
+
 	// 实现符合 Web 标准的 atob 函数
 	decoded, err := b.webAtob(input)
 	if err != nil {
@@ -1260,15 +1260,15 @@ func (b *Buffer) btoa(call goja.FunctionCall) goja.Value {
 	if len(call.Arguments) == 0 {
 		panic(b.r.NewTypeError("btoa: At least 1 argument required"))
 	}
-	
+
 	arg := call.Arguments[0]
-	
+
 	// 检查是否为 Symbol 类型
 	if symbol, ok := arg.(*goja.Symbol); ok {
 		_ = symbol // 避免未使用变量警告
 		panic(b.r.NewTypeError("Cannot convert a Symbol value to a string"))
 	}
-	
+
 	// 也检查对象包装的 Symbol
 	if obj, ok := arg.(*goja.Object); ok {
 		if exported := obj.Export(); exported != nil {
@@ -1277,21 +1277,21 @@ func (b *Buffer) btoa(call goja.FunctionCall) goja.Value {
 			}
 		}
 	}
-	
+
 	input := arg.String()
-	
+
 	// 将字符串转换为字节数组 - 每个字符作为一个字节处理（Latin-1）
 	bytes := make([]byte, 0, len(input))
 	for _, r := range input {
 		if r > 255 {
 			// 创建 InvalidCharacterError
-		err := b.r.NewGoError(stderrors.New("InvalidCharacterError The string to be encoded contains characters outside of the Latin1 range."))
-		err.Set("name", b.r.ToValue("InvalidCharacterError"))
-		panic(err)
+			err := b.r.NewGoError(stderrors.New("InvalidCharacterError The string to be encoded contains characters outside of the Latin1 range."))
+			err.Set("name", b.r.ToValue("InvalidCharacterError"))
+			panic(err)
 		}
 		bytes = append(bytes, byte(r))
 	}
-	
+
 	encoded := base64.StdEncoding.EncodeToString(bytes)
 	return b.r.ToValue(encoded)
 }
@@ -1305,7 +1305,7 @@ func (b *Buffer) webAtob(input string) (string, error) {
 
 	// 2. 移除所有空白字符 (space, tab, newline, form feed, carriage return)
 	cleaned := b.removeWhitespace(input)
-	
+
 	// 3. 先验证所有字符都是有效的 Base64 字符（优先检查）
 	if !b.isValidBase64String(cleaned) {
 		return "", stderrors.New("character error")
@@ -1348,16 +1348,16 @@ func (b *Buffer) removeWhitespace(s string) string {
 // isValidBase64String 检查字符串是否只包含有效的 Base64 字符
 func (b *Buffer) isValidBase64String(s string) bool {
 	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	
+
 	// 创建有效的 Base64 字符集（不包括填充符）
 	validChars := make(map[rune]bool, 64)
 	for _, r := range base64Chars {
 		validChars[r] = true
 	}
-	
+
 	// 查找第一个填充符位置
 	firstPadding := strings.IndexByte(s, '=')
-	
+
 	if firstPadding == -1 {
 		// 没有填充字符，检查所有字符是否有效
 		for _, r := range s {
@@ -1367,7 +1367,7 @@ func (b *Buffer) isValidBase64String(s string) bool {
 		}
 		return true
 	}
-	
+
 	// 有填充字符的情况
 	// 1. 检查填充符之前的字符是否都是有效的 Base64 字符
 	for i := 0; i < firstPadding; i++ {
@@ -1375,30 +1375,30 @@ func (b *Buffer) isValidBase64String(s string) bool {
 			return false
 		}
 	}
-	
+
 	// 2. 填充字符只能出现在末尾
 	for i := firstPadding; i < len(s); i++ {
 		if s[i] != '=' {
 			return false
 		}
 	}
-	
+
 	// 3. 检查填充数量 (最多2个)
 	paddingCount := len(s) - firstPadding
 	if paddingCount > 2 {
 		return false
 	}
-	
+
 	// 4. 特殊情况：只有填充符是无效的
 	if firstPadding == 0 {
 		return false
 	}
-	
+
 	// 5. 检查长度是否符合 Base64 规则
 	if len(s)%4 != 0 {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -1412,19 +1412,19 @@ func (b *Buffer) isValidPadding(s string) bool {
 			break
 		}
 	}
-	
+
 	if firstPadding == -1 {
 		// 没有填充字符，这是允许的
 		return true
 	}
-	
+
 	// 填充字符只能出现在末尾
 	for i := firstPadding; i < len(s); i++ {
 		if s[i] != '=' {
 			return false
 		}
 	}
-	
+
 	// 检查填充数量 (最多2个)
 	paddingCount := len(s) - firstPadding
 	return paddingCount <= 2
@@ -1436,7 +1436,7 @@ func (b *Buffer) normalizePadding(s string) string {
 	if len(s)%4 == 0 {
 		return s
 	}
-	
+
 	// 添加必要的填充字符
 	paddingNeeded := 4 - (len(s) % 4)
 	return s + strings.Repeat("=", paddingNeeded)
