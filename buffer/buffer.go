@@ -1194,26 +1194,12 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	exports := module.Get("exports").(*goja.Object)
 	exports.Set("Buffer", ctor)
 
-	// 定义常量值
-	const maxLength int64 = 9007199254740991  // Number.MAX_SAFE_INTEGER
-	const maxStringLength int64 = 536870888   // Node.js v25 的值
-	const inspectMaxBytes int64 = 50          // Node.js 默认值
-
 	// 导出 constants 对象（Node.js 兼容）
 	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
 	constantsObj := b.r.NewObject()
-	
-	// 🔥 最简单方法：只用Set()，让属性自然可枚举
-	// 根据测试需求，优先保证枚举性，暂时放弃不可写、不可配置特性
-	constantsObj.Set("MAX_LENGTH", b.r.ToValue(maxLength))
-	constantsObj.Set("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength))
-	
+	constantsObj.Set("MAX_LENGTH", 9007199254740991) // Number.MAX_SAFE_INTEGER
+	constantsObj.Set("MAX_STRING_LENGTH", 536870888) // Node.js v25 的值
 	exports.Set("constants", constantsObj)
-	
-	// 导出别名常量（Node.js 兼容）
-	exports.Set("kMaxLength", b.r.ToValue(maxLength))
-	exports.Set("kStringMaxLength", b.r.ToValue(maxStringLength))
-	exports.Set("INSPECT_MAX_BYTES", b.r.ToValue(inspectMaxBytes))
 
 	// 导出 atob 和 btoa 函数（Node.js v25 兼容）
 	atobFunc := b.r.ToValue(b.atob)
