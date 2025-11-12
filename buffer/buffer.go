@@ -1191,6 +1191,13 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 
 	exports := module.Get("exports").(*goja.Object)
 	exports.Set("Buffer", ctor)
+	
+	// 导出 constants 对象（Node.js 兼容）
+	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
+	constantsObj := b.r.NewObject()
+	constantsObj.Set("MAX_LENGTH", 9007199254740991)      // Number.MAX_SAFE_INTEGER
+	constantsObj.Set("MAX_STRING_LENGTH", 536870888)      // Node.js v25 的值
+	exports.Set("constants", constantsObj)
 }
 
 func init() {
