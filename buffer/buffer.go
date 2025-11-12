@@ -313,6 +313,19 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 			}
 			// array-like
 			if v := o.Get("length"); v != nil {
+				// 检查 length 是否为有效的数字类型（Node.js 行为对齐）
+				// 使用 JavaScript 的 typeof 检查，只有 "number" 类型才被认为是有效的 length
+				typeCheckResult, err := b.r.RunString("(function(val) { return typeof val === 'number'; })")
+				if err == nil {
+					if typeCheckFunc, ok := goja.AssertFunction(typeCheckResult); ok {
+						isNumber, err := typeCheckFunc(goja.Undefined(), v)
+						if err == nil && !isNumber.ToBoolean() {
+							// 非数字类型的 length 被忽略，当作没有 length 属性处理
+							goto notArrayLike
+						}
+					}
+				}
+				
 				lengthVal := v.ToInteger()
 				// 防止 makeslice panic：检查长度范围
 				if lengthVal < 0 {
@@ -336,6 +349,7 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 			}
 		}
 	}
+notArrayLike:
 	panic(errors.NewTypeError(b.r, errors.ErrCodeInvalidArgType, "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received %s", arg))
 }
 
