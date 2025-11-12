@@ -1203,7 +1203,7 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
 	constantsObj := b.r.NewObject()
 	
-	// 设置属性为不可写、不可配置、可枚举（Node.js 标准）
+	// 设置属性为不可写、可枚举、不可配置（Node.js 标准）
 	constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE)
 	constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE)
 	
