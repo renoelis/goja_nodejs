@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	stderrors "errors"
+	"fmt"
 	"math"
 	"math/big"
 	"reflect"
@@ -1203,12 +1204,36 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
 	constantsObj := b.r.NewObject()
 	
-	// 设置属性为不可写、可枚举、不可配置（Node.js 标准）
-	// DefineDataProperty(name, value, writable, configurable, enumerable)
-	constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
-	constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	// 先用普通方式设置属性值
+	constantsObj.Set("MAX_LENGTH", b.r.ToValue(maxLength))
+	constantsObj.Set("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength))
 	
-	// Node.js 中 constants 对象本身不被冻结，只是属性不可写、不可配置
+	// 然后通过JavaScript的Object.defineProperty来设置正确的属性描述符
+	// 设置常量对象到全局临时变量
+	b.r.Set("__tempConstants__", constantsObj)
+	
+	_, err := b.r.RunString(fmt.Sprintf(`
+		Object.defineProperty(__tempConstants__, 'MAX_LENGTH', {
+			value: %d,
+			writable: false,
+			enumerable: true,
+			configurable: false
+		});
+		Object.defineProperty(__tempConstants__, 'MAX_STRING_LENGTH', {
+			value: %d,
+			writable: false,
+			enumerable: true,
+			configurable: false
+		});
+		delete this.__tempConstants__;
+	`, maxLength, maxStringLength))
+	
+	if err != nil {
+		// 如果JavaScript方式失败，回退到原来的方式并清理临时变量
+		b.r.GlobalObject().Delete("__tempConstants__")
+		constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+		constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	}
 	
 	exports.Set("constants", constantsObj)
 	
