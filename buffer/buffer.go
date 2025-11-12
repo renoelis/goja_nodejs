@@ -1197,9 +1197,52 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	// 导出 constants 对象（Node.js 兼容）
 	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
 	constantsObj := b.r.NewObject()
-	constantsObj.Set("MAX_LENGTH", 9007199254740991) // Number.MAX_SAFE_INTEGER
-	constantsObj.Set("MAX_STRING_LENGTH", 536870888) // Node.js v25 的值
+	constantsObj.DefineDataProperty(
+		"MAX_LENGTH",
+		b.r.ToValue(9007199254740991), // Number.MAX_SAFE_INTEGER
+		goja.FLAG_FALSE,               // writable
+		goja.FLAG_FALSE,               // configurable
+		goja.FLAG_TRUE,                // enumerable
+	)
+	constantsObj.DefineDataProperty(
+		"MAX_STRING_LENGTH",
+		b.r.ToValue(536870888), // Node.js v25 的值
+		goja.FLAG_FALSE,        // writable
+		goja.FLAG_FALSE,        // configurable
+		goja.FLAG_TRUE,         // enumerable
+	)
 	exports.Set("constants", constantsObj)
+
+	// 导出常量别名（Node.js v25 兼容）
+	// kMaxLength: buffer 模块的 MAX_LENGTH 别名
+	kMaxLength := int64(9007199254740991) // Number.MAX_SAFE_INTEGER
+	exports.DefineDataProperty(
+		"kMaxLength",
+		b.r.ToValue(kMaxLength),
+		goja.FLAG_FALSE, // writable
+		goja.FLAG_FALSE, // configurable
+		goja.FLAG_TRUE,  // enumerable
+	)
+
+	// kStringMaxLength: buffer 模块的 MAX_STRING_LENGTH 别名
+	kStringMaxLength := int64(536870888) // 2^29 - 24
+	exports.DefineDataProperty(
+		"kStringMaxLength",
+		b.r.ToValue(kStringMaxLength),
+		goja.FLAG_FALSE, // writable
+		goja.FLAG_FALSE, // configurable
+		goja.FLAG_TRUE,  // enumerable
+	)
+
+	// INSPECT_MAX_BYTES: util.inspect 使用的最大字节数
+	inspectMaxBytes := int64(50)
+	exports.DefineDataProperty(
+		"INSPECT_MAX_BYTES",
+		b.r.ToValue(inspectMaxBytes),
+		goja.FLAG_FALSE, // writable
+		goja.FLAG_FALSE, // configurable
+		goja.FLAG_TRUE,  // enumerable
+	)
 
 	// 导出 atob 和 btoa 函数（Node.js v25 兼容）
 	atobFunc := b.r.ToValue(b.atob)
