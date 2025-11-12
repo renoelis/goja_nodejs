@@ -1204,8 +1204,9 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	constantsObj := b.r.NewObject()
 	
 	// 设置属性为不可写、可枚举、不可配置（Node.js 标准）
-	constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE)
-	constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE)
+	// DefineDataProperty(name, value, writable, configurable, enumerable)
+	constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+	constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	
 	// 冻结 constants 对象使其不可变
 	objectProto := b.r.GlobalObject().Get("Object")
