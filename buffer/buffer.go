@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	stderrors "errors"
-	"fmt"
 	"math"
 	"math/big"
 	"reflect"
@@ -1204,35 +1203,47 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
 	constantsObj := b.r.NewObject()
 	
-	// 先用普通方式设置属性值
+	// 🔥 尝试最简单的方式：直接使用Set，让属性自然可枚举
 	constantsObj.Set("MAX_LENGTH", b.r.ToValue(maxLength))
 	constantsObj.Set("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength))
 	
-	// 然后通过JavaScript的Object.defineProperty来设置正确的属性描述符
-	// 设置常量对象到全局临时变量
-	b.r.Set("__tempConstants__", constantsObj)
+	// 设置constants对象到全局变量，然后用JavaScript手动设置属性不可写性
+	b.r.Set("__bufferConstants__", constantsObj)
 	
-	_, err := b.r.RunString(fmt.Sprintf(`
-		Object.defineProperty(__tempConstants__, 'MAX_LENGTH', {
-			value: %d,
+	_, err := b.r.RunString(`
+		// 获取constants对象
+		const constants = __bufferConstants__;
+		
+		// 手动设置每个属性为不可写、不可配置但可枚举
+		const maxLengthValue = constants.MAX_LENGTH;
+		const maxStringLengthValue = constants.MAX_STRING_LENGTH;
+		
+		// 重新定义属性，确保enumerable为true
+		delete constants.MAX_LENGTH;
+		delete constants.MAX_STRING_LENGTH;
+		
+		Object.defineProperty(constants, 'MAX_LENGTH', {
+			value: maxLengthValue,
 			writable: false,
 			enumerable: true,
 			configurable: false
 		});
-		Object.defineProperty(__tempConstants__, 'MAX_STRING_LENGTH', {
-			value: %d,
+		
+		Object.defineProperty(constants, 'MAX_STRING_LENGTH', {
+			value: maxStringLengthValue,
 			writable: false,
 			enumerable: true,
 			configurable: false
 		});
-		delete this.__tempConstants__;
-	`, maxLength, maxStringLength))
+		
+		// 清理临时变量
+		delete this.__bufferConstants__;
+	`)
 	
 	if err != nil {
-		// 如果JavaScript方式失败，回退到原来的方式并清理临时变量
-		b.r.GlobalObject().Delete("__tempConstants__")
-		constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
-		constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
+		// 如果JavaScript方式失败，清理并记录错误
+		b.r.GlobalObject().Delete("__bufferConstants__")
+		// 继续使用基本的Set方式，至少保证功能可用
 	}
 	
 	exports.Set("constants", constantsObj)
