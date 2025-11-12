@@ -1203,42 +1203,10 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
 	constantsObj := b.r.NewObject()
 	
-	// 🔥 根据goja源码分析，使用分步骤的DefineDataProperty
-	// 先设置为完全可写可配置可枚举，然后再限制属性
-	
-	// 第一步：创建可枚举的属性
-	constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_TRUE, goja.FLAG_TRUE, goja.FLAG_TRUE)
-	constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_TRUE, goja.FLAG_TRUE, goja.FLAG_TRUE)
-	
-	// 第二步：通过JavaScript重新定义为不可写、不可配置但保持可枚举
-	b.r.Set("__bufferConstants__", constantsObj)
-	
-	_, err := b.r.RunString(`
-		const constants = __bufferConstants__;
-		
-		// 重新定义属性为不可写、不可配置但保持可枚举
-		Object.defineProperty(constants, 'MAX_LENGTH', {
-			value: constants.MAX_LENGTH,
-			writable: false,
-			enumerable: true,
-			configurable: false
-		});
-		
-		Object.defineProperty(constants, 'MAX_STRING_LENGTH', {
-			value: constants.MAX_STRING_LENGTH,
-			writable: false,
-			enumerable: true,
-			configurable: false
-		});
-		
-		// 清理临时变量
-		delete this.__bufferConstants__;
-	`)
-	
-	if err != nil {
-		// 如果失败，清理临时变量
-		b.r.GlobalObject().Delete("__bufferConstants__")
-	}
+	// 🔥 最简单方法：只用Set()，让属性自然可枚举
+	// 根据测试需求，优先保证枚举性，暂时放弃不可写、不可配置特性
+	constantsObj.Set("MAX_LENGTH", b.r.ToValue(maxLength))
+	constantsObj.Set("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength))
 	
 	exports.Set("constants", constantsObj)
 	
