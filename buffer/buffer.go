@@ -1211,7 +1211,25 @@ func (b *Buffer) atob(call goja.FunctionCall) goja.Value {
 	if len(call.Arguments) == 0 {
 		panic(b.r.NewTypeError("atob: At least 1 argument required"))
 	}
-	input := call.Arguments[0].String()
+	
+	arg := call.Arguments[0]
+	
+	// 检查是否为 Symbol 类型 - 直接检查类型而不是调用转换方法
+	if symbol, ok := arg.(*goja.Symbol); ok {
+		_ = symbol // 避免未使用变量警告
+		panic(b.r.NewTypeError("Cannot convert a Symbol value to a string"))
+	}
+	
+	// 也检查对象包装的 Symbol
+	if obj, ok := arg.(*goja.Object); ok {
+		if exported := obj.Export(); exported != nil {
+			if _, ok := exported.(*goja.Symbol); ok {
+				panic(b.r.NewTypeError("Cannot convert a Symbol value to a string"))
+			}
+		}
+	}
+	
+	input := arg.String()
 	
 	// 实现符合 Web 标准的 atob 函数
 	decoded, err := b.webAtob(input)
@@ -1261,7 +1279,13 @@ func (b *Buffer) webAtob(input string) (string, error) {
 		return "", stderrors.New("invalid base64 string")
 	}
 
-	return string(decoded), nil
+	// 按照 Web 标准，将每个字节作为 Latin-1 字符处理
+	// 而不是作为 UTF-8 字符串处理
+	result := make([]rune, len(decoded))
+	for i, b := range decoded {
+		result[i] = rune(b)
+	}
+	return string(result), nil
 }
 
 // removeWhitespace 移除字符串中的所有 ASCII 空白字符
