@@ -1208,11 +1208,7 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE)
 	
-	// 冻结 constants 对象使其不可变
-	objectProto := b.r.GlobalObject().Get("Object")
-	if freezeFunc, ok := goja.AssertFunction(objectProto.ToObject(b.r).Get("freeze")); ok {
-		freezeFunc(goja.Undefined(), constantsObj)
-	}
+	// Node.js 中 constants 对象本身不被冻结，只是属性不可写、不可配置
 	
 	exports.Set("constants", constantsObj)
 	
