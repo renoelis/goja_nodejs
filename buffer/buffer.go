@@ -321,10 +321,14 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 						isNumber, err := typeCheckFunc(goja.Undefined(), v)
 						if err == nil && !isNumber.ToBoolean() {
 							// 非数字类型的 length 被忽略，当作没有 length 属性处理
-							goto notArrayLike
+							// 但不跳转到错误，而是继续尝试其他处理方式
+							v = nil
 						}
 					}
 				}
+				
+				// 只有当 v 不为 nil 时才处理（即 length 是数字类型）
+				if v != nil {
 				
 				lengthVal := v.ToInteger()
 				// 防止 makeslice panic：检查长度范围
@@ -346,10 +350,10 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 					}
 				}
 				return b.fromBytes(a)
+				}
 			}
 		}
 	}
-notArrayLike:
 	panic(errors.NewTypeError(b.r, errors.ErrCodeInvalidArgType, "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received %s", arg))
 }
 
