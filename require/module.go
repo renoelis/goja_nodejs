@@ -55,6 +55,7 @@ type RequireModule struct {
 	runtime     *js.Runtime
 	modules     map[string]*js.Object
 	nodeModules map[string]*js.Object
+	cacheObj    *js.Object
 }
 
 func NewRegistry(opts ...Option) *Registry {
@@ -114,6 +115,14 @@ func (r *Registry) Enable(runtime *js.Runtime) *RequireModule {
 	}
 
 	runtime.Set("require", rrt.require)
+
+	if requireVal := runtime.Get("require"); requireVal != nil && !js.IsUndefined(requireVal) && !js.IsNull(requireVal) {
+		requireObj := requireVal.ToObject(runtime)
+		cacheObj := rrt.ensureCacheObject()
+		requireObj.Set("resolve", runtime.ToValue(rrt.requireResolve))
+		rrt.cacheObj = cacheObj
+	}
+
 	return rrt
 }
 
@@ -222,6 +231,29 @@ func (r *RequireModule) require(call js.FunctionCall) js.Value {
 	return ret
 }
 
+func (r *RequireModule) requireResolve(call js.FunctionCall) js.Value {
+	if len(call.Arguments) == 0 {
+		panic(r.runtime.NewTypeError("The \"id\" argument must be provided"))
+	}
+	idVal := call.Argument(0)
+	if js.IsUndefined(idVal) || js.IsNull(idVal) {
+		panic(r.runtime.NewTypeError("The \"id\" argument must be of type string"))
+	}
+	id := idVal.String()
+	module, err := r.resolve(id)
+	if err != nil {
+		if _, ok := err.(*js.Exception); !ok {
+			panic(r.runtime.NewGoError(err))
+		}
+		panic(err)
+	}
+	resolved := r.findModulePath(module, id)
+	if resolved == "" {
+		resolved = id
+	}
+	return r.runtime.ToValue(resolved)
+}
+
 func filepathClean(p string) string {
 	return path.Clean(p)
 }
@@ -245,6 +277,91 @@ func Require(runtime *js.Runtime, name string) js.Value {
 		return mod
 	}
 	panic(runtime.NewTypeError("Please enable require for this runtime using new(require.Registry).Enable(runtime)"))
+}
+
+func (r *RequireModule) addToCache(path string, module *js.Object) {
+	cacheObj := r.ensureCacheObject()
+	if cacheObj == nil {
+		return
+	}
+	cacheObj.Set(path, module)
+}
+
+func (r *RequireModule) removeFromCache(path string) {
+	cacheObj := r.ensureCacheObject()
+	if cacheObj == nil {
+		return
+	}
+	cacheObj.Delete(path)
+}
+
+func (r *RequireModule) getCachedModule(path string) *js.Object {
+	if r.runtime == nil {
+		return nil
+	}
+	cacheObj := r.ensureCacheObject()
+	if cacheObj == nil {
+		return nil
+	}
+	val := cacheObj.Get(path)
+	if val == nil || js.IsUndefined(val) || js.IsNull(val) {
+		return nil
+	}
+	// 缓存中应该只存储对象，如果不是对象类型，直接返回 nil
+	if obj, ok := val.(*js.Object); ok {
+		return obj
+	}
+	// 如果不是对象类型，不尝试转换，直接返回 nil
+	// 这样可以避免 ToObject() 可能导致的 panic
+	return nil
+}
+
+func (r *RequireModule) findModulePath(module *js.Object, preferred string) string {
+	if preferred != "" {
+		if cached := r.getCachedModule(preferred); cached != nil && cached == module {
+			return preferred
+		}
+	}
+	for p, m := range r.modules {
+		if m == module {
+			return p
+		}
+	}
+	for p, m := range r.nodeModules {
+		if m == module {
+			return p
+		}
+	}
+	return preferred
+}
+
+func (r *RequireModule) ensureCacheObject() *js.Object {
+	if r.runtime == nil {
+		return nil
+	}
+	requireVal := r.runtime.Get("require")
+	if requireVal == nil || js.IsUndefined(requireVal) || js.IsNull(requireVal) {
+		return nil
+	}
+	requireObj := requireVal.ToObject(r.runtime)
+	if requireObj == nil {
+		return nil
+	}
+	cacheVal := requireObj.Get("cache")
+	if js.IsUndefined(cacheVal) || js.IsNull(cacheVal) {
+		cacheObj := r.runtime.NewObject()
+		requireObj.Set("cache", cacheObj)
+		r.cacheObj = cacheObj
+		return r.cacheObj
+	}
+	if obj, ok := cacheVal.(*js.Object); ok {
+		r.cacheObj = obj
+		return r.cacheObj
+	}
+	cacheObj := r.runtime.NewObject()
+	requireObj.Set("cache", cacheObj)
+	r.cacheObj = cacheObj
+	return r.cacheObj
 }
 
 // RegisterNativeModule registers a module that isn't loaded through a SourceLoader, but rather through

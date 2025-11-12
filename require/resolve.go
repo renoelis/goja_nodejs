@@ -31,7 +31,14 @@ func (r *RequireModule) resolve(modpath string) (module *js.Object, err error) {
 	p := r.resolvePath(start, modpath)
 	if isFileOrDirectoryPath(modpath) {
 		if module = r.modules[p]; module != nil {
-			return
+			if cached := r.getCachedModule(p); cached != nil {
+				if module != cached {
+					r.modules[p] = cached
+				}
+				return cached, nil
+			}
+			delete(r.modules, p)
+			module = nil
 		}
 		module, err = r.loadAsFileOrDirectory(p)
 		if err == nil && module != nil {
@@ -49,7 +56,14 @@ func (r *RequireModule) resolve(modpath string) (module *js.Object, err error) {
 			}
 		}
 		if module = r.nodeModules[p]; module != nil {
-			return
+			if cached := r.getCachedModule(p); cached != nil {
+				if module != cached {
+					r.nodeModules[p] = cached
+				}
+				return cached, nil
+			}
+			delete(r.nodeModules, p)
+			module = nil
 		}
 		module, err = r.loadNodeModules(modpath, start)
 		if err == nil && module != nil {
@@ -64,9 +78,14 @@ func (r *RequireModule) resolve(modpath string) (module *js.Object, err error) {
 }
 
 func (r *RequireModule) loadNative(path string) (*js.Object, error) {
-	module := r.modules[path]
-	if module != nil {
-		return module, nil
+	if module := r.modules[path]; module != nil {
+		if cached := r.getCachedModule(path); cached != nil {
+			if module != cached {
+				r.modules[path] = cached
+			}
+			return cached, nil
+		}
+		delete(r.modules, path)
 	}
 
 	var ldr ModuleLoader
@@ -88,18 +107,22 @@ func (r *RequireModule) loadNative(path string) (*js.Object, error) {
 	}
 
 	if ldr != nil {
-		module = r.createModuleObject()
+		module := r.createModuleObject(path)
 		r.modules[path] = module
+		r.addToCache(path, module)
 		if isBuiltIn {
 			if withPrefix {
 				r.modules[path[len(NodePrefix):]] = module
+				r.addToCache(path[len(NodePrefix):], module)
 			} else {
 				if !strings.HasPrefix(path, NodePrefix) {
 					r.modules[NodePrefix+path] = module
+					r.addToCache(NodePrefix+path, module)
 				}
 			}
 		}
 		ldr(r.runtime, module)
+		module.Set("loaded", r.runtime.ToValue(true))
 		return module, nil
 	}
 
@@ -202,27 +225,40 @@ func (r *RequireModule) getCurrentModulePath() string {
 	return filepath.Dir(frames[1].SrcName())
 }
 
-func (r *RequireModule) createModuleObject() *js.Object {
+func (r *RequireModule) createModuleObject(path string) *js.Object {
 	module := r.runtime.NewObject()
+	module.Set("id", r.runtime.ToValue(path))
+	module.Set("filename", r.runtime.ToValue(path))
+	module.Set("loaded", r.runtime.ToValue(false))
+	module.Set("parent", js.Undefined())
+	module.Set("children", r.runtime.NewArray())
 	module.Set("exports", r.runtime.NewObject())
 	return module
 }
 
 func (r *RequireModule) loadModule(path string) (*js.Object, error) {
-	module := r.modules[path]
-	if module == nil {
-		module = r.createModuleObject()
-		r.modules[path] = module
-		err := r.loadModuleFile(path, module)
-		if err != nil {
-			module = nil
-			delete(r.modules, path)
-			if errors.Is(err, ModuleFileDoesNotExistError) {
-				err = nil
+	if module := r.modules[path]; module != nil {
+		if cached := r.getCachedModule(path); cached != nil {
+			if module != cached {
+				r.modules[path] = cached
 			}
+			return cached, nil
 		}
-		return module, err
+		delete(r.modules, path)
 	}
+	module := r.createModuleObject(path)
+	r.modules[path] = module
+	r.addToCache(path, module)
+	err := r.loadModuleFile(path, module)
+	if err != nil {
+		delete(r.modules, path)
+		r.removeFromCache(path)
+		if errors.Is(err, ModuleFileDoesNotExistError) {
+			err = nil
+		}
+		return nil, err
+	}
+	module.Set("loaded", r.runtime.ToValue(true))
 	return module, nil
 }
 
