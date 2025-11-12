@@ -1202,8 +1202,19 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	exports.Set("constants", constantsObj)
 	
 	// 导出 atob 和 btoa 函数（Node.js v25 兼容）
-	exports.Set("atob", b.atob)
-	exports.Set("btoa", b.btoa)
+	atobFunc := b.r.ToValue(b.atob)
+	if atobObj, ok := atobFunc.(*goja.Object); ok {
+		atobObj.DefineDataProperty("length", b.r.ToValue(1), 0, 0, 0)
+		atobObj.DefineDataProperty("name", b.r.ToValue("atob"), 0, 0, 0)
+	}
+	exports.Set("atob", atobFunc)
+	
+	btoaFunc := b.r.ToValue(b.btoa)
+	if btoaObj, ok := btoaFunc.(*goja.Object); ok {
+		btoaObj.DefineDataProperty("length", b.r.ToValue(1), 0, 0, 0)
+		btoaObj.DefineDataProperty("name", b.r.ToValue("btoa"), 0, 0, 0)
+	}
+	exports.Set("btoa", btoaFunc)
 }
 
 // atob - ASCII 到二进制 (Base64 解码) - Web 标准实现
@@ -1234,8 +1245,12 @@ func (b *Buffer) atob(call goja.FunctionCall) goja.Value {
 	// 实现符合 Web 标准的 atob 函数
 	decoded, err := b.webAtob(input)
 	if err != nil {
-		// 创建 InvalidCharacterError - Web 标准错误类型
-		panic(b.r.NewGoError(stderrors.New("InvalidCharacterError Invalid character")))
+		// 根据错误类型创建合适的错误消息
+		if err.Error() == "character error" {
+			panic(b.r.NewGoError(stderrors.New("Invalid character")))
+		} else {
+			panic(b.r.NewGoError(stderrors.New("The string to be decoded is not correctly encoded.")))
+		}
 	}
 	return b.r.ToValue(decoded)
 }
@@ -1245,8 +1260,39 @@ func (b *Buffer) btoa(call goja.FunctionCall) goja.Value {
 	if len(call.Arguments) == 0 {
 		panic(b.r.NewTypeError("btoa: At least 1 argument required"))
 	}
-	input := call.Arguments[0].String()
-	encoded := base64.StdEncoding.EncodeToString([]byte(input))
+	
+	arg := call.Arguments[0]
+	
+	// 检查是否为 Symbol 类型
+	if symbol, ok := arg.(*goja.Symbol); ok {
+		_ = symbol // 避免未使用变量警告
+		panic(b.r.NewTypeError("Cannot convert a Symbol value to a string"))
+	}
+	
+	// 也检查对象包装的 Symbol
+	if obj, ok := arg.(*goja.Object); ok {
+		if exported := obj.Export(); exported != nil {
+			if _, ok := exported.(*goja.Symbol); ok {
+				panic(b.r.NewTypeError("Cannot convert a Symbol value to a string"))
+			}
+		}
+	}
+	
+	input := arg.String()
+	
+	// 将字符串转换为字节数组 - 每个字符作为一个字节处理（Latin-1）
+	bytes := make([]byte, 0, len(input))
+	for _, r := range input {
+		if r > 255 {
+			// 创建 InvalidCharacterError
+		err := b.r.NewGoError(stderrors.New("InvalidCharacterError The string to be encoded contains characters outside of the Latin1 range."))
+		err.Set("name", b.r.ToValue("InvalidCharacterError"))
+		panic(err)
+		}
+		bytes = append(bytes, byte(r))
+	}
+	
+	encoded := base64.StdEncoding.EncodeToString(bytes)
 	return b.r.ToValue(encoded)
 }
 
@@ -1260,14 +1306,14 @@ func (b *Buffer) webAtob(input string) (string, error) {
 	// 2. 移除所有空白字符 (space, tab, newline, form feed, carriage return)
 	cleaned := b.removeWhitespace(input)
 	
-	// 3. 验证字符串长度是否符合 Base64 规则
-	if len(cleaned)%4 == 1 {
-		return "", stderrors.New("invalid base64 length")
+	// 3. 先验证所有字符都是有效的 Base64 字符（优先检查）
+	if !b.isValidBase64String(cleaned) {
+		return "", stderrors.New("character error")
 	}
 
-	// 4. 验证所有字符都是有效的 Base64 字符
-	if !b.isValidBase64String(cleaned) {
-		return "", stderrors.New("invalid base64 character")
+	// 4. 然后验证字符串长度是否符合 Base64 规则
+	if len(cleaned)%4 == 1 {
+		return "", stderrors.New("encoding error")
 	}
 
 	// 5. 标准化填充
@@ -1301,22 +1347,59 @@ func (b *Buffer) removeWhitespace(s string) string {
 
 // isValidBase64String 检查字符串是否只包含有效的 Base64 字符
 func (b *Buffer) isValidBase64String(s string) bool {
-	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 	
-	validChars := make(map[rune]bool, 65)
+	// 创建有效的 Base64 字符集（不包括填充符）
+	validChars := make(map[rune]bool, 64)
 	for _, r := range base64Chars {
 		validChars[r] = true
 	}
 	
-	// 检查每个字符
-	for _, r := range s {
-		if !validChars[r] {
+	// 查找第一个填充符位置
+	firstPadding := strings.IndexByte(s, '=')
+	
+	if firstPadding == -1 {
+		// 没有填充字符，检查所有字符是否有效
+		for _, r := range s {
+			if !validChars[r] {
+				return false
+			}
+		}
+		return true
+	}
+	
+	// 有填充字符的情况
+	// 1. 检查填充符之前的字符是否都是有效的 Base64 字符
+	for i := 0; i < firstPadding; i++ {
+		if !validChars[rune(s[i])] {
 			return false
 		}
 	}
 	
-	// 检查填充字符的位置是否正确
-	return b.isValidPadding(s)
+	// 2. 填充字符只能出现在末尾
+	for i := firstPadding; i < len(s); i++ {
+		if s[i] != '=' {
+			return false
+		}
+	}
+	
+	// 3. 检查填充数量 (最多2个)
+	paddingCount := len(s) - firstPadding
+	if paddingCount > 2 {
+		return false
+	}
+	
+	// 4. 特殊情况：只有填充符是无效的
+	if firstPadding == 0 {
+		return false
+	}
+	
+	// 5. 检查长度是否符合 Base64 规则
+	if len(s)%4 != 0 {
+		return false
+	}
+	
+	return true
 }
 
 // isValidPadding 检查填充字符(=)的位置是否符合 Base64 规则
