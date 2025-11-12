@@ -313,7 +313,18 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 			}
 			// array-like
 			if v := o.Get("length"); v != nil {
-				length := int(v.ToInteger())
+				lengthVal := v.ToInteger()
+				// 防止 makeslice panic：检查长度范围
+				if lengthVal < 0 {
+					lengthVal = 0
+				}
+				// 限制最大长度以防止内存溢出（Node.js 的 Buffer 最大长度约为 2GB）
+				const maxBufferLength = 0x7FFFFFFF // 2^31 - 1
+				if lengthVal > maxBufferLength {
+					panic(errors.NewRangeError(b.r, errors.ErrCodeInvalidArgValue, "Invalid array length"))
+				}
+				
+				length := int(lengthVal)
 				a := make([]byte, length)
 				for i := 0; i < length; i++ {
 					item := o.Get(strconv.Itoa(i))
