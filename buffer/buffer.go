@@ -1194,12 +1194,31 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	exports := module.Get("exports").(*goja.Object)
 	exports.Set("Buffer", ctor)
 
+	// 定义常量值
+	const maxLength int64 = 9007199254740991  // Number.MAX_SAFE_INTEGER
+	const maxStringLength int64 = 536870888   // Node.js v25 的值
+	const inspectMaxBytes int64 = 50          // Node.js 默认值
+
 	// 导出 constants 对象（Node.js 兼容）
 	// 参考：https://nodejs.org/api/buffer.html#bufferconstants
 	constantsObj := b.r.NewObject()
-	constantsObj.Set("MAX_LENGTH", 9007199254740991) // Number.MAX_SAFE_INTEGER
-	constantsObj.Set("MAX_STRING_LENGTH", 536870888) // Node.js v25 的值
+	
+	// 设置属性为不可写、不可配置、可枚举（Node.js 标准）
+	constantsObj.DefineDataProperty("MAX_LENGTH", b.r.ToValue(maxLength), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE)
+	constantsObj.DefineDataProperty("MAX_STRING_LENGTH", b.r.ToValue(maxStringLength), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE)
+	
+	// 冻结 constants 对象使其不可变
+	objectProto := b.r.GlobalObject().Get("Object")
+	if freezeFunc, ok := goja.AssertFunction(objectProto.ToObject(b.r).Get("freeze")); ok {
+		freezeFunc(goja.Undefined(), constantsObj)
+	}
+	
 	exports.Set("constants", constantsObj)
+	
+	// 导出别名常量（Node.js 兼容）
+	exports.Set("kMaxLength", b.r.ToValue(maxLength))
+	exports.Set("kStringMaxLength", b.r.ToValue(maxStringLength))
+	exports.Set("INSPECT_MAX_BYTES", b.r.ToValue(inspectMaxBytes))
 
 	// 导出 atob 和 btoa 函数（Node.js v25 兼容）
 	atobFunc := b.r.ToValue(b.atob)
