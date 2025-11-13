@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	stderrors "errors"
+	"fmt"
 	"math"
 	"math/big"
 	"reflect"
@@ -42,6 +43,11 @@ var (
 	reflectTypeInt         = reflect.TypeOf(int64(0))
 	reflectTypeFloat       = reflect.TypeOf(0.0)
 	reflectTypeBytes       = reflect.TypeOf(([]byte)(nil))
+)
+
+var (
+	// INSPECT_MAX_BYTES 全局值，所有 Buffer 实例共享
+	inspectMaxBytesValue int64 = 50
 )
 
 func Enable(runtime *goja.Runtime) {
@@ -1288,11 +1294,64 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	)
 
 	// INSPECT_MAX_BYTES: util.inspect 使用的最大字节数
-	inspectMaxBytes := int64(50)
-	exports.DefineDataProperty(
+	// 需要使用 accessor property 来验证输入（与 Node.js v25.0.0 对齐）
+	inspectMaxBytesGetter := b.r.ToValue(func(call goja.FunctionCall) goja.Value {
+		return b.r.ToValue(inspectMaxBytesValue)
+	})
+
+	inspectMaxBytesSetter := b.r.ToValue(func(call goja.FunctionCall) goja.Value {
+		newValue := call.Argument(0)
+
+		// 类型验证：必须是 number
+		if goja.IsUndefined(newValue) || goja.IsNull(newValue) {
+			panic(errors.NewTypeError(b.r, errors.ErrCodeInvalidArgType,
+				`The "INSPECT_MAX_BYTES" argument must be of type number. Received `+newValue.String()))
+		}
+
+		// 检查是否为数字类型
+		exported := newValue.Export()
+		var numValue float64
+		switch v := exported.(type) {
+		case int64:
+			numValue = float64(v)
+		case int:
+			numValue = float64(v)
+		case float64:
+			numValue = v
+		case float32:
+			numValue = float64(v)
+		default:
+			// 非数字类型抛出 TypeError
+			typeName := "unknown"
+			if exported == nil {
+				typeName = "undefined"
+			} else {
+				typeName = reflect.TypeOf(exported).String()
+			}
+			panic(errors.NewTypeError(b.r, errors.ErrCodeInvalidArgType,
+				`The "INSPECT_MAX_BYTES" argument must be of type number. Received type `+typeName))
+		}
+
+		// 范围验证：必须 >= 0
+		if math.IsNaN(numValue) {
+			panic(errors.NewRangeError(b.r, errors.ErrCodeOutOfRange,
+				`The value of "INSPECT_MAX_BYTES" is out of range. It must be >= 0. Received NaN`))
+		}
+
+		if numValue < 0 {
+			panic(errors.NewRangeError(b.r, errors.ErrCodeOutOfRange,
+				fmt.Sprintf(`The value of "INSPECT_MAX_BYTES" is out of range. It must be >= 0. Received %v`, numValue)))
+		}
+
+		// 更新值
+		inspectMaxBytesValue = int64(numValue)
+		return goja.Undefined()
+	})
+
+	exports.DefineAccessorProperty(
 		"INSPECT_MAX_BYTES",
-		b.r.ToValue(inspectMaxBytes),
-		goja.FLAG_TRUE,  // writable - 与 Node.js v25.0.0 对齐，允许修改
+		inspectMaxBytesGetter,
+		inspectMaxBytesSetter,
 		goja.FLAG_FALSE, // configurable
 		goja.FLAG_TRUE,  // enumerable
 	)
