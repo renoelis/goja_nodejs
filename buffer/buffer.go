@@ -268,8 +268,34 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 		panic(errors.NewTypeError(b.r, errors.ErrCodeInvalidArgType, "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received undefined"))
 	}
 	arg := args[0]
+
 	switch arg.ExportType() {
 	case reflectTypeArrayBuffer:
+		// 尝试导出为 ArrayBuffer
+		ab := arg.Export().(goja.ArrayBuffer)
+		abLen := int64(len(ab.Bytes()))
+
+		// 验证 offset 和 length 参数
+		// 检查 offset 参数
+		if len(args) > 1 && !goja.IsUndefined(args[1]) {
+			offset := args[1].ToInteger()
+			if offset < 0 {
+				panic(errors.NewRangeError(b.r, errors.ErrCodeOutOfRange, "The value of \"offset\" is out of range. It must be >= 0. Received %d", offset))
+			}
+			if offset > abLen {
+				panic(errors.NewRangeError(b.r, errors.ErrCodeOutOfRange, "The value of \"offset\" is out of range. It must be <= %d. Received %d", abLen, offset))
+			}
+
+			// 检查 length 参数
+			if len(args) > 2 && !goja.IsUndefined(args[2]) {
+				length := args[2].ToInteger()
+				// 负数长度不需要特殊处理，uint8ArrayCtor 会处理
+				if length >= 0 && offset+length > abLen {
+					panic(errors.NewRangeError(b.r, errors.ErrCodeOutOfRange, "The value of \"length\" is out of range. It must be <= %d. Received %d", abLen-offset, length))
+				}
+			}
+		}
+
 		v, err := b.uint8ArrayCtor(b.bufferCtorObj, args...)
 		if err != nil {
 			panic(err)
@@ -283,6 +309,33 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 		return b.fromString(arg.String(), enc)
 	default:
 		if o, ok := arg.(*goja.Object); ok {
+			// 在处理之前，先检查是否是 Symbol 或函数类型
+
+			// 检查是否是函数 - 必须在其他检查之前
+			if _, isFunc := goja.AssertFunction(arg); isFunc {
+				panic(errors.NewTypeError(b.r, errors.ErrCodeInvalidArgType, "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received function"))
+			}
+
+			// 检查是否是 Symbol - Symbol 对象有特殊的 description 属性
+			// 并且不应该有 byteLength 属性（排除真正的 ArrayBuffer）
+			desc := o.Get("description")
+			byteLength := o.Get("byteLength")
+			if desc != nil && !goja.IsUndefined(desc) && (byteLength == nil || goja.IsUndefined(byteLength)) {
+				// 可能是 Symbol，进一步检查
+				// Symbol 不能被当作字符串或其他类型处理
+				// 尝试调用 Symbol.prototype.toString，如果成功且返回 "Symbol(...)"，则确认是 Symbol
+				toStr := o.Get("toString")
+				if f, ok := goja.AssertFunction(toStr); ok {
+					result, err := f(o)
+					if err == nil && result != nil {
+						strResult := result.String()
+						if len(strResult) >= 7 && strResult[:7] == "Symbol(" {
+							panic(errors.NewTypeError(b.r, errors.ErrCodeInvalidArgType, "The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object. Received symbol"))
+						}
+					}
+				}
+			}
+
 			if o.ExportType() == reflectTypeBytes {
 				bb, _ := o.Export().([]byte)
 				a := make([]byte, len(bb))
@@ -313,35 +366,7 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 			}
 			// array-like
 			if v := o.Get("length"); v != nil {
-				// 检查 length 是否为有效的数字类型（Node.js 行为对齐）
-				// 使用 JavaScript 的 typeof 检查，只有 "number" 类型才被认为是有效的 length
-				typeCheckResult, err := b.r.RunString("(function(val) { return typeof val === 'number'; })")
-				if err == nil {
-					if typeCheckFunc, ok := goja.AssertFunction(typeCheckResult); ok {
-						isNumber, err := typeCheckFunc(goja.Undefined(), v)
-						if err == nil && !isNumber.ToBoolean() {
-							// 非数字类型的 length 被忽略，当作没有 length 属性处理
-							// 但不跳转到错误，而是继续尝试其他处理方式
-							v = nil
-						}
-					}
-				}
-				
-				// 只有当 v 不为 nil 时才处理（即 length 是数字类型）
-				if v != nil {
-				
-				lengthVal := v.ToInteger()
-				// 防止 makeslice panic：检查长度范围
-				if lengthVal < 0 {
-					lengthVal = 0
-				}
-				// 限制最大长度以防止内存溢出（Node.js 的 Buffer 最大长度约为 2GB）
-				const maxBufferLength = 0x7FFFFFFF // 2^31 - 1
-				if lengthVal > maxBufferLength {
-					panic(errors.NewRangeError(b.r, errors.ErrCodeInvalidArgValue, "Invalid array length"))
-				}
-				
-				length := int(lengthVal)
+				length := int(v.ToInteger())
 				a := make([]byte, length)
 				for i := 0; i < length; i++ {
 					item := o.Get(strconv.Itoa(i))
@@ -350,7 +375,6 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 					}
 				}
 				return b.fromBytes(a)
-				}
 			}
 		}
 	}
@@ -1268,7 +1292,7 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	exports.DefineDataProperty(
 		"INSPECT_MAX_BYTES",
 		b.r.ToValue(inspectMaxBytes),
-		goja.FLAG_FALSE, // writable
+		goja.FLAG_TRUE,  // writable - 与 Node.js v25.0.0 对齐，允许修改
 		goja.FLAG_FALSE, // configurable
 		goja.FLAG_TRUE,  // enumerable
 	)
