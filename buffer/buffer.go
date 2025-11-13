@@ -31,6 +31,9 @@ type Buffer struct {
 
 	uint8ArrayCtorObj *goja.Object
 	uint8ArrayCtor    goja.Constructor
+
+	// INSPECT_MAX_BYTES 值（每个 runtime 独立）
+	inspectMaxBytesValue float64
 }
 
 var (
@@ -43,11 +46,6 @@ var (
 	reflectTypeInt         = reflect.TypeOf(int64(0))
 	reflectTypeFloat       = reflect.TypeOf(0.0)
 	reflectTypeBytes       = reflect.TypeOf(([]byte)(nil))
-)
-
-var (
-	// INSPECT_MAX_BYTES 全局值，所有 Buffer 实例共享
-	inspectMaxBytesValue int64 = 50
 )
 
 func Enable(runtime *goja.Runtime) {
@@ -488,6 +486,54 @@ func (b *Buffer) proto_equals(call goja.FunctionCall) goja.Value {
 		return b.r.ToValue(bytes.Equal(bb, otherBytes))
 	}
 	panic(errors.NewTypeError(b.r, errors.ErrCodeInvalidArgType, "The \"otherBuffer\" argument must be an instance of Buffer or Uint8Array."))
+}
+
+// proto_inspect 实现 Buffer.prototype.inspect() 方法
+// 根据 INSPECT_MAX_BYTES 的值截断显示
+// 注意：此方法可能会被 enhance_modules/buffer/write_methods.go 覆盖
+func (b *Buffer) proto_inspect(call goja.FunctionCall) goja.Value {
+	bb := Bytes(b.r, call.This)
+	maxBytes := b.inspectMaxBytesValue
+	return b.formatInspect(bb, maxBytes)
+}
+
+// formatInspect 格式化 Buffer 的 inspect 输出
+func (b *Buffer) formatInspect(bb []byte, maxBytes float64) goja.Value {
+	var result strings.Builder
+	result.WriteString("<Buffer ")
+
+	// 将浮点数 maxBytes 转换为实际显示的字节数（向下取整用于索引）
+	displayBytes := int(math.Floor(maxBytes))
+	totalBytes := len(bb)
+	truncated := false
+
+	if displayBytes > totalBytes {
+		displayBytes = totalBytes
+	} else if displayBytes < totalBytes {
+		truncated = true
+	}
+
+	// 显示字节（十六进制格式）
+	for i := 0; i < displayBytes; i++ {
+		if i > 0 {
+			result.WriteString(" ")
+		}
+		result.WriteString(fmt.Sprintf("%02x", bb[i]))
+	}
+
+	// 如果被截断，显示剩余字节数（保留浮点数）
+	if truncated {
+		remaining := float64(totalBytes) - maxBytes
+		// 格式化：如果是整数显示为整数，否则显示为浮点数
+		if remaining == math.Floor(remaining) {
+			result.WriteString(fmt.Sprintf(" ... %d more bytes", int(remaining)))
+		} else {
+			result.WriteString(fmt.Sprintf(" ... %g more bytes", remaining))
+		}
+	}
+
+	result.WriteString(">")
+	return b.r.ToValue(result.String())
 }
 
 // readBigInt64BE reads a big-endian 64-bit signed integer from the buffer
@@ -1127,7 +1173,10 @@ func signExtend(value int64, numBytes int64) int64 {
 }
 
 func Require(runtime *goja.Runtime, module *goja.Object) {
-	b := &Buffer{r: runtime}
+	b := &Buffer{
+		r:                    runtime,
+		inspectMaxBytesValue: 50, // 默认值
+	}
 	uint8Array := runtime.Get("Uint8Array")
 	if c, ok := goja.AssertConstructor(uint8Array); ok {
 		b.uint8ArrayCtor = c
@@ -1147,6 +1196,7 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	proto.DefineDataProperty("constructor", ctor, goja.FLAG_TRUE, goja.FLAG_TRUE, goja.FLAG_FALSE)
 	proto.Set("equals", b.proto_equals)
 	proto.Set("toString", b.proto_toString)
+	proto.Set("inspect", b.proto_inspect)
 	proto.Set("readBigInt64BE", b.readBigInt64BE)
 	proto.Set("readBigInt64LE", b.readBigInt64LE)
 	proto.Set("readBigUInt64BE", b.readBigUInt64BE)
@@ -1296,7 +1346,7 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 	// INSPECT_MAX_BYTES: util.inspect 使用的最大字节数
 	// 需要使用 accessor property 来验证输入（与 Node.js v25.0.0 对齐）
 	inspectMaxBytesGetter := b.r.ToValue(func(call goja.FunctionCall) goja.Value {
-		return b.r.ToValue(inspectMaxBytesValue)
+		return b.r.ToValue(b.inspectMaxBytesValue)
 	})
 
 	inspectMaxBytesSetter := b.r.ToValue(func(call goja.FunctionCall) goja.Value {
@@ -1343,8 +1393,8 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 				fmt.Sprintf(`The value of "INSPECT_MAX_BYTES" is out of range. It must be >= 0. Received %v`, numValue)))
 		}
 
-		// 更新值
-		inspectMaxBytesValue = int64(numValue)
+		// 更新值（保留浮点数，与 Node.js 对齐）
+		b.inspectMaxBytesValue = numValue
 		return goja.Undefined()
 	})
 
@@ -1355,6 +1405,9 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 		goja.FLAG_FALSE, // configurable
 		goja.FLAG_TRUE,  // enumerable
 	)
+
+	// 在 exports 上也存储 API 实例引用（用于 inspect 方法访问）
+	exports.DefineDataPropertySymbol(symApi, runtime.ToValue(b), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
 
 	// 导出 atob 和 btoa 函数（Node.js v25 兼容）
 	atobFunc := b.r.ToValue(b.atob)
