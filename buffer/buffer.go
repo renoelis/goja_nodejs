@@ -155,8 +155,19 @@ func (b *Buffer) ctor(call goja.ConstructorCall) (res *goja.Object) {
 	arg := call.Argument(0)
 	switch arg.ExportType() {
 	case reflectTypeInt, reflectTypeFloat:
-		panic(b.r.NewTypeError("Calling the Buffer constructor with numeric argument is not implemented yet"))
-		// TODO implement
+		// 支持 new Buffer(size) - 对齐 Node.js 行为
+		// 注意：在 Node.js v6+ 中，new Buffer(size) 已被弃用，推荐使用 Buffer.alloc(size)
+		// 但为了兼容性，我们仍然需要支持这种用法
+		size := -1
+		if goja.IsNumber(arg) {
+			size = int(arg.ToInteger())
+		}
+		if size < 0 {
+			panic(b.r.NewTypeError("invalid buffer size"))
+		}
+		// 创建指定大小的 Buffer（与 Buffer.allocUnsafe 行为一致）
+		buf := make([]byte, size)
+		return b.fromBytes(buf)
 	}
 	return b._from(call.Arguments...)
 }
