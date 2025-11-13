@@ -86,6 +86,15 @@ func GetApi(r *goja.Runtime) *Buffer {
 	return api(mod(r))
 }
 
+// GetInspectMaxBytes 返回当前 runtime 的 INSPECT_MAX_BYTES 值
+// 用于 enhance_modules/buffer 的 inspect 方法
+func GetInspectMaxBytes(r *goja.Runtime) float64 {
+	if bufAPI := GetApi(r); bufAPI != nil {
+		return bufAPI.inspectMaxBytesValue
+	}
+	return 50.0 // 默认值
+}
+
 func DecodeBytes(r *goja.Runtime, arg, enc goja.Value) []byte {
 	switch arg.ExportType() {
 	case reflectTypeArrayBuffer:
@@ -293,8 +302,13 @@ func (b *Buffer) _from(args ...goja.Value) *goja.Object {
 			// 检查 length 参数
 			if len(args) > 2 && !goja.IsUndefined(args[2]) {
 				length := args[2].ToInteger()
-				// 负数长度不需要特殊处理，uint8ArrayCtor 会处理
-				if length >= 0 && offset+length > abLen {
+				// 🔥 修复：Node.js v25.0.0 行为 - 负数 length 创建空 Buffer (length=0)
+				// goja 的 Uint8Array 构造函数会对负数 length 抛出错误，需要先处理
+				if length < 0 {
+					// 负数 length：修改 args[2] 为 0，创建空 Buffer
+					args[2] = b.r.ToValue(0)
+				} else if offset+length > abLen {
+					// 正数 length：检查是否超出 ArrayBuffer 范围
 					panic(errors.NewRangeError(b.r, errors.ErrCodeOutOfRange, "The value of \"length\" is out of range. It must be <= %d. Received %d", abLen-offset, length))
 				}
 			}
@@ -502,16 +516,24 @@ func (b *Buffer) formatInspect(bb []byte, maxBytes float64) goja.Value {
 	var result strings.Builder
 	result.WriteString("<Buffer ")
 
+	// 🔥 修复：处理 Number.MAX_VALUE 等极大值的溢出
 	// 将浮点数 maxBytes 转换为实际显示的字节数（向下取整用于索引）
-	displayBytes := int(math.Floor(maxBytes))
 	totalBytes := len(bb)
-	truncated := false
+	var displayBytes int
 
-	if displayBytes > totalBytes {
+	// 检查是否超出 int 最大值（避免溢出）
+	// math.MaxInt = 9223372036854775807 (int64 on 64-bit systems)
+	if maxBytes > float64(math.MaxInt) || math.IsInf(maxBytes, 1) {
+		// 极大值或 +Infinity：显示全部字节
 		displayBytes = totalBytes
-	} else if displayBytes < totalBytes {
-		truncated = true
+	} else {
+		displayBytes = int(math.Floor(maxBytes))
+		if displayBytes > totalBytes {
+			displayBytes = totalBytes
+		}
 	}
+
+	truncated := displayBytes < totalBytes
 
 	// 显示字节（十六进制格式）
 	for i := 0; i < displayBytes; i++ {
