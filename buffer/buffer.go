@@ -1445,6 +1445,14 @@ func Require(runtime *goja.Runtime, module *goja.Object) {
 		btoaObj.DefineDataProperty("name", b.r.ToValue("btoa"), 0, 0, 0)
 	}
 	exports.Set("btoa", btoaFunc)
+
+	// 🔥 添加 isAscii 函数（Node.js v19.0.0+）
+	isAsciiFunc := b.r.ToValue(b.isAscii)
+	if isAsciiObj, ok := isAsciiFunc.(*goja.Object); ok {
+		isAsciiObj.DefineDataProperty("length", b.r.ToValue(1), 0, 0, 0)
+		isAsciiObj.DefineDataProperty("name", b.r.ToValue("isAscii"), 0, 0, 0)
+	}
+	exports.Set("isAscii", isAsciiFunc)
 }
 
 // atob - ASCII 到二进制 (Base64 解码) - Web 标准实现
@@ -1524,6 +1532,184 @@ func (b *Buffer) btoa(call goja.FunctionCall) goja.Value {
 
 	encoded := base64.StdEncoding.EncodeToString(bytes)
 	return b.r.ToValue(encoded)
+}
+
+// isAscii - 检查 Buffer 或 TypedArray 是否只包含有效的 ASCII 字符（0x00-0x7F）
+// Node.js v19.0.0+
+func (b *Buffer) isAscii(call goja.FunctionCall) goja.Value {
+	if len(call.Arguments) == 0 {
+		panic(b.r.NewTypeError("The \"input\" argument must be an instance of Buffer, TypedArray, or ArrayBuffer. Received undefined"))
+	}
+
+	input := call.Arguments[0]
+	if goja.IsNull(input) || goja.IsUndefined(input) {
+		panic(b.r.NewTypeError("The \"input\" argument must be an instance of Buffer, TypedArray, or ArrayBuffer. Received " + input.String()))
+	}
+
+	// 🔥 先检查原始类型（string, number, boolean, bigint, function）
+	// 这些类型在 ToObject 之前就要拒绝
+	argType := input.ExportType()
+	if argType != nil {
+		switch argType.Kind().String() {
+		case "string":
+			panic(b.r.NewTypeError("The \"input\" argument must be an instance of Buffer, TypedArray, or ArrayBuffer. Received type string"))
+		case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "float32", "float64":
+			panic(b.r.NewTypeError("The \"input\" argument must be an instance of Buffer, TypedArray, or ArrayBuffer. Received type number"))
+		case "bool":
+			panic(b.r.NewTypeError("The \"input\" argument must be an instance of Buffer, TypedArray, or ArrayBuffer. Received type boolean"))
+		}
+	}
+
+	// 🔥 检查函数类型（必须在 ToObject 之前）
+	if _, isFunc := goja.AssertFunction(input); isFunc {
+		panic(b.r.NewTypeError("The \"input\" argument must be an instance of ArrayBuffer, Buffer, or TypedArray. Received function"))
+	}
+
+	inputObj := input.ToObject(b.r)
+	if inputObj == nil {
+		panic(b.r.NewTypeError("The \"input\" argument must be an instance of Buffer, TypedArray, or ArrayBuffer. Received " + input.String()))
+	}
+
+	// 🔥 检查 constructor.name 以识别特殊类型
+	var constructorName string
+	if constructor := inputObj.Get("constructor"); constructor != nil && !goja.IsUndefined(constructor) {
+		if constructorObj := constructor.ToObject(b.r); constructorObj != nil {
+			if nameVal := constructorObj.Get("name"); !goja.IsUndefined(nameVal) {
+				constructorName = nameVal.String()
+			}
+		}
+	}
+
+	// 🔥 检查 BigInt 类型
+	if constructorName == "BigInt" {
+		bigIntStr := input.String()
+		panic(b.r.NewTypeError(fmt.Sprintf("The \"input\" argument must be an instance of ArrayBuffer, Buffer, or TypedArray. Received type bigint (%s)", bigIntStr)))
+	}
+
+	// 🔥 检查普通数组 - 必须明确拒绝
+	if constructorName == "Array" {
+		panic(b.r.NewTypeError("The \"input\" argument must be an instance of ArrayBuffer, Buffer, or TypedArray. Received an instance of Array"))
+	}
+
+	// 🔥 检查 DataView - Node.js 不支持
+	if constructorName == "DataView" {
+		panic(b.r.NewTypeError("The \"input\" argument must be an instance of ArrayBuffer, Buffer, or TypedArray. Received an instance of DataView"))
+	}
+
+	// 🔥 检查普通对象 - 必须明确拒绝所有普通对象（包括类数组对象）
+	if constructorName == "Object" {
+		panic(b.r.NewTypeError("The \"input\" argument must be an instance of ArrayBuffer, Buffer, or TypedArray. Received an instance of Object"))
+	}
+
+	// 检查是否是 Buffer, TypedArray, 或 ArrayBuffer
+	// 获取 length 或 byteLength 属性
+	lengthVal := inputObj.Get("length")
+	byteLengthVal := inputObj.Get("byteLength")
+	bytesPerElementVal := inputObj.Get("BYTES_PER_ELEMENT")
+
+	var length int64
+	var isArrayBuffer bool
+	var bytesPerElement int64 = 1
+
+	// 获取 BYTES_PER_ELEMENT (如果存在)
+	if bytesPerElementVal != nil && !goja.IsUndefined(bytesPerElementVal) {
+		bytesPerElement = bytesPerElementVal.ToInteger()
+	}
+
+	// ArrayBuffer 没有 length 属性，只有 byteLength
+	if (lengthVal == nil || goja.IsUndefined(lengthVal)) && byteLengthVal != nil && !goja.IsUndefined(byteLengthVal) {
+		// 可能是 ArrayBuffer
+		isArrayBuffer = true
+		length = byteLengthVal.ToInteger()
+	} else if lengthVal != nil && !goja.IsUndefined(lengthVal) {
+		// Buffer 或 TypedArray
+		// 对于 TypedArray,我们需要检查所有字节,不是元素
+		if bytesPerElement > 1 {
+			// 多字节 TypedArray (如 Int16Array, BigInt64Array 等)
+			// 需要按字节检查,所以使用 byteLength
+			if byteLengthVal != nil && !goja.IsUndefined(byteLengthVal) {
+				length = byteLengthVal.ToInteger()
+				// 标记为需要按字节访问
+				isArrayBuffer = true
+			} else {
+				length = lengthVal.ToInteger() * bytesPerElement
+				isArrayBuffer = true
+			}
+		} else {
+			// 单字节 TypedArray (Uint8Array, Buffer 等)
+			length = lengthVal.ToInteger()
+		}
+	} else {
+		// 不是有效的类型
+		panic(b.r.NewTypeError("The \"input\" argument must be an instance of Buffer, TypedArray, or ArrayBuffer"))
+	}
+
+	// 空 buffer 被视为有效 ASCII
+	if length == 0 {
+		return b.r.ToValue(true)
+	}
+
+	// 检查每个字节
+	if isArrayBuffer || bytesPerElement > 1 {
+		// ArrayBuffer 或多字节 TypedArray: 需要创建 Uint8Array 视图来按字节访问
+		// 先获取底层的 ArrayBuffer
+		var arrayBuffer goja.Value
+		if isArrayBuffer && constructorName == "ArrayBuffer" {
+			// 已经是 ArrayBuffer
+			arrayBuffer = input
+		} else {
+			// 是 TypedArray,获取其 buffer 属性
+			bufferProp := inputObj.Get("buffer")
+			if bufferProp != nil && !goja.IsUndefined(bufferProp) {
+				arrayBuffer = bufferProp
+			} else {
+				// 如果没有 buffer 属性,fallback 到原来的逻辑
+				arrayBuffer = input
+			}
+		}
+
+		uint8ArrayCtor := b.r.Get("Uint8Array")
+		if uint8ArrayCtor == nil || goja.IsUndefined(uint8ArrayCtor) {
+			panic(b.r.NewTypeError("Uint8Array is not available"))
+		}
+		ctorFunc, ok := goja.AssertConstructor(uint8ArrayCtor)
+		if !ok {
+			panic(b.r.NewTypeError("Uint8Array is not a constructor"))
+		}
+
+		// 对于 TypedArray,还需要考虑 byteOffset
+		byteOffsetVal := inputObj.Get("byteOffset")
+		var byteOffset int64 = 0
+		if byteOffsetVal != nil && !goja.IsUndefined(byteOffsetVal) {
+			byteOffset = byteOffsetVal.ToInteger()
+		}
+
+		// 创建 Uint8Array 视图: new Uint8Array(buffer, byteOffset, byteLength)
+		view, err := ctorFunc(nil, arrayBuffer, b.r.ToValue(byteOffset), b.r.ToValue(length))
+		if err != nil {
+			panic(err)
+		}
+		inputObj = view.ToObject(b.r)
+		// 更新 length 为字节数
+		if viewLengthVal := inputObj.Get("length"); viewLengthVal != nil && !goja.IsUndefined(viewLengthVal) {
+			length = viewLengthVal.ToInteger()
+		}
+	}
+
+	// 逐字节检查
+	for i := int64(0); i < length; i++ {
+		val := inputObj.Get(strconv.FormatInt(i, 10))
+		if val == nil || goja.IsUndefined(val) {
+			continue
+		}
+		byteVal := val.ToInteger() & 0xFF
+		// ASCII 范围: 0x00 - 0x7F
+		if byteVal > 0x7F {
+			return b.r.ToValue(false)
+		}
+	}
+
+	return b.r.ToValue(true)
 }
 
 // webAtob 实现符合 Web 标准的 atob 函数
